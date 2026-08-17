@@ -5,8 +5,9 @@ const path = require("node:path");
 const { DatabaseSync } = require("node:sqlite");
 const { runMigrations } = require("../server");
 
-if (process.env.WORKSPACE_IMPORT_MODE !== "rehearsal") {
-  process.stderr.write("Refusing import: set WORKSPACE_IMPORT_MODE=rehearsal.\n");
+const importMode = String(process.env.WORKSPACE_IMPORT_MODE || "").trim();
+if (!new Set(["rehearsal", "commit"]).has(importMode)) {
+  process.stderr.write("Refusing import: set WORKSPACE_IMPORT_MODE=rehearsal or commit.\n");
   process.exit(2);
 }
 const sourcePath = String(process.env.LEGACY_DB_PATH || "").trim();
@@ -35,6 +36,10 @@ target.exec("PRAGMA foreign_keys = ON");
 runMigrations(target, path.join(__dirname, "..", "migrations"));
 
 const snapshotSha = crypto.createHash("sha256").update(fs.readFileSync(sourcePath)).digest("hex");
+if (importMode === "commit" && String(process.env.WORKSPACE_IMPORT_SOURCE_SHA256 || "").trim() !== snapshotSha) {
+  process.stderr.write("Refusing import: WORKSPACE_IMPORT_SOURCE_SHA256 does not match the current source snapshot.\n");
+  process.exit(3);
+}
 const accounts = new Map();
 for (const row of source.prepare("SELECT email,user_id FROM user_accounts").all()) {
   accounts.set(String(row.email || "").trim().toLowerCase(), String(row.user_id || ""));
@@ -117,6 +122,7 @@ try {
 
 const output = {
   contract_version: "workspace_legacy_chat_rehearsal.v1",
+  mode: importMode,
   source_snapshot_sha256: snapshotSha,
   imported: { workspaces: seenWorkspace.size, chats: importedChats, memberships: importedMemberships, messages: importedMessages },
   target: {
