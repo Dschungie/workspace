@@ -25,3 +25,41 @@ test("health and readiness work with a persistent SQLite database", async () => 
   await new Promise((resolve) => server.close(resolve));
   assert.equal(fs.existsSync(dbPath), true);
 });
+
+test("Living exchange creates an isolated Workspace session", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-exchange-"));
+  const dbPath = path.join(dir, "workspace.sqlite");
+  const server = createWorkspaceServer({
+    dbPath,
+    exchangeUrl: "http://living.test/api/workspace-auth/exchange",
+    exchangeSecret: "exchange-secret",
+    fetchImpl: async (url, init) => {
+      assert.equal(url, "http://living.test/api/workspace-auth/exchange");
+      assert.match(init.headers.cookie, /nessha_session=living-token/);
+      assert.equal(init.headers["x-workspace-exchange-secret"], "exchange-secret");
+      return new Response(JSON.stringify({
+        ok: true,
+        contract_version: "living_workspace_auth_exchange.v1",
+        subject_id: "living-subject-1",
+        workspace: { id: "workspace:demo", label: "Demo Workspace", role: "workspace_owner" },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  const exchange = await fetch(`http://127.0.0.1:${port}/workspace/session/exchange`, {
+    method: "POST",
+    headers: { cookie: "nessha_session=living-token" },
+  });
+  assert.equal(exchange.status, 200);
+  const cookie = exchange.headers.get("set-cookie");
+  assert.match(cookie, /workspace_session=/);
+  assert.match(cookie, /Path=\/workspace/);
+  const me = await fetch(`http://127.0.0.1:${port}/workspace/me`, {
+    headers: { cookie: cookie.split(";")[0] },
+  }).then((response) => response.json());
+  assert.equal(me.ok, true);
+  assert.equal(me.workspace.id, "workspace:demo");
+  assert.equal(me.workspace.role, "owner");
+  await new Promise((resolve) => server.close(resolve));
+});
