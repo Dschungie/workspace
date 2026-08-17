@@ -1,0 +1,23 @@
+services:
+  workspace:
+    build: .
+    image: nessha-workspace:0.1.0
+    container_name: nessha-workspace
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATA_DIR: /data
+    ports:
+      - "127.0.0.1:3105:3000"
+    volumes:
+      - workspace_data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  workspace_data:
+    name: nessha_workspace_data

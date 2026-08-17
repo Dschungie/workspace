@@ -1,0 +1,10 @@
+{
+  "schema": "nessha_living_workspace_authorization_exchange_v1",
+  "status": "placeholder",
+  "purpose": "Reserved contract for a future one-time Living authorization-code exchange.",
+  "rules": [
+    "No shared root session cookie.",
+    "No direct Living database access.",
+    "No private Workspace data in Living authorization payloads."
+  ]
+}
