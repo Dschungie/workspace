@@ -6,10 +6,6 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ \
-  && rm -rf /var/lib/apt/lists/*
-
 COPY . .
 
 RUN useradd --system --uid 10001 --create-home workspace \
