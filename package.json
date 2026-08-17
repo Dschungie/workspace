@@ -10,7 +10,8 @@
     "start": "node server.js",
     "test": "node --test test/*.test.js",
     "smoke": "node scripts/smoke.js",
-    "audit:legacy-snapshot": "node scripts/legacy-workspace-inventory.js"
+    "audit:legacy-snapshot": "node scripts/legacy-workspace-inventory.js",
+    "rehearse:legacy-chat-import": "node scripts/rehearse-legacy-chat-import.js"
   },
   "dependencies": {}
 }
