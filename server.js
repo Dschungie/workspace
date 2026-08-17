@@ -68,6 +68,28 @@ function clearWorkspaceSessionCookie(res) {
   res.setHeader("Set-Cookie", "workspace_session=; Path=/workspace; HttpOnly; Secure; SameSite=Lax; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT");
 }
 
+function safeText(value, { min = 0, max = 10000 } = {}) {
+  const text = String(value || "").trim();
+  if (text.length < min || text.length > max) return "";
+  return text;
+}
+
+function safeHtml(value) {
+  return String(value || "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
+}
+
+async function readJsonBody(req, maxBytes = 64 * 1024) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) throw new Error("request_too_large");
+    chunks.push(chunk);
+  }
+  if (!chunks.length) return {};
+  try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw new Error("request_json_invalid"); }
+}
+
 function createWorkspaceServer({
   dbPath: customDbPath = dbPath,
   exchangeUrl = livingExchangeUrl,
@@ -195,6 +217,113 @@ function createWorkspaceServer({
       clearWorkspaceSessionCookie(res);
       return json(200, { ok: true });
     }
+    if (req.method === "GET" && url.pathname === "/workspace/chats") {
+      const session = sessionForRequest(req);
+      if (!session) return json(401, { ok: false, reason_code: "workspace_session_required" });
+      const chats = db.prepare(
+        `SELECT c.id, c.kind, c.title, c.updated_at, cm.role
+         FROM chats c JOIN chat_memberships cm ON cm.chat_id=c.id
+         WHERE c.workspace_id=? AND cm.living_subject_id=? ORDER BY c.updated_at DESC LIMIT 100`
+      ).all(session.workspace_id, session.living_subject_id);
+      return json(200, { ok: true, chats });
+    }
+    if (req.method === "POST" && url.pathname === "/workspace/chats") {
+      const session = sessionForRequest(req);
+      if (!session) return json(401, { ok: false, reason_code: "workspace_session_required" });
+      const body = await readJsonBody(req);
+      const title = safeText(body.title, { min: 1, max: 160 });
+      if (!title) return json(400, { ok: false, reason_code: "chat_title_invalid" });
+      const timestamp = new Date(now()).toISOString();
+      const chatId = crypto.randomUUID();
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.prepare("INSERT INTO chats(id,workspace_id,kind,title,created_at,updated_at) VALUES(?,?,'group',?,?,?)").run(chatId, session.workspace_id, title, timestamp, timestamp);
+        db.prepare("INSERT INTO chat_memberships(chat_id,living_subject_id,role,joined_at) VALUES(?,?, 'owner', ?)").run(chatId, session.living_subject_id, timestamp);
+        db.prepare("INSERT INTO workspace_audit_events(id,workspace_id,actor_subject_id,event_type,resource_type,resource_id,created_at) VALUES(?,?,?,?,?,?,?)")
+          .run(crypto.randomUUID(), session.workspace_id, session.living_subject_id, "chat_created", "chat", chatId, timestamp);
+        db.exec("COMMIT");
+      } catch (error) { db.exec("ROLLBACK"); throw error; }
+      return json(201, { ok: true, chat: { id: chatId, kind: "group", title, updated_at: timestamp, role: "owner" } });
+    }
+    const messageRoute = url.pathname.match(/^\/workspace\/chats\/([0-9a-f-]{36})\/messages$/i);
+    if (messageRoute && (req.method === "GET" || req.method === "POST")) {
+      const session = sessionForRequest(req);
+      if (!session) return json(401, { ok: false, reason_code: "workspace_session_required" });
+      const chatId = messageRoute[1];
+      const membership = db.prepare(
+        "SELECT c.id FROM chats c JOIN chat_memberships cm ON cm.chat_id=c.id WHERE c.id=? AND c.workspace_id=? AND cm.living_subject_id=? LIMIT 1"
+      ).get(chatId, session.workspace_id, session.living_subject_id);
+      if (!membership) return json(404, { ok: false, reason_code: "chat_not_found" });
+      if (req.method === "GET") {
+        const messages = db.prepare(
+          "SELECT id, author_subject_id, body, created_at, edited_at FROM messages WHERE chat_id=? AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 200"
+        ).all(chatId);
+        return json(200, { ok: true, messages });
+      }
+      const body = await readJsonBody(req);
+      const message = safeText(body.body, { min: 1, max: 10000 });
+      if (!message) return json(400, { ok: false, reason_code: "message_body_invalid" });
+      const timestamp = new Date(now()).toISOString();
+      const messageId = crypto.randomUUID();
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.prepare("INSERT INTO messages(id,chat_id,author_subject_id,body,created_at) VALUES(?,?,?,?,?)").run(messageId, chatId, session.living_subject_id, message, timestamp);
+        db.prepare("UPDATE chats SET updated_at=? WHERE id=?").run(timestamp, chatId);
+        db.prepare("INSERT INTO workspace_audit_events(id,workspace_id,actor_subject_id,event_type,resource_type,resource_id,created_at) VALUES(?,?,?,?,?,?,?)")
+          .run(crypto.randomUUID(), session.workspace_id, session.living_subject_id, "message_created", "message", messageId, timestamp);
+        db.exec("COMMIT");
+      } catch (error) { db.exec("ROLLBACK"); throw error; }
+      return json(201, { ok: true, message: { id: messageId, body: message, created_at: timestamp } });
+    }
+    if (req.method === "GET" && url.pathname === "/workspace/tasks") {
+      const session = sessionForRequest(req);
+      if (!session) return json(401, { ok: false, reason_code: "workspace_session_required" });
+      const tasks = db.prepare("SELECT id,title,scope,state,assigned_to,created_at,updated_at FROM chip_tasks WHERE workspace_id=? ORDER BY updated_at DESC LIMIT 100")
+        .all(session.workspace_id);
+      return json(200, { ok: true, tasks });
+    }
+    if (req.method === "POST" && url.pathname === "/workspace/tasks") {
+      const session = sessionForRequest(req);
+      if (!session) return json(401, { ok: false, reason_code: "workspace_session_required" });
+      const body = await readJsonBody(req);
+      const title = safeText(body.title, { min: 1, max: 240 });
+      const scope = safeText(body.scope, { min: 1, max: 8000 });
+      if (!title || !scope) return json(400, { ok: false, reason_code: "task_input_invalid" });
+      const timestamp = new Date(now()).toISOString();
+      const taskId = crypto.randomUUID();
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.prepare("INSERT INTO chip_tasks(id,workspace_id,requested_by_subject_id,state,title,scope,created_at,updated_at) VALUES(?,?,?,'draft',?,?,?,?)")
+          .run(taskId, session.workspace_id, session.living_subject_id, title, scope, timestamp, timestamp);
+        db.prepare("INSERT INTO workspace_audit_events(id,workspace_id,actor_subject_id,event_type,resource_type,resource_id,created_at) VALUES(?,?,?,?,?,?,?)")
+          .run(crypto.randomUUID(), session.workspace_id, session.living_subject_id, "task_created", "task", taskId, timestamp);
+        db.exec("COMMIT");
+      } catch (error) { db.exec("ROLLBACK"); throw error; }
+      return json(201, { ok: true, task: { id: taskId, title, scope, state: "draft", created_at: timestamp } });
+    }
+    const approvalRoute = url.pathname.match(/^\/workspace\/tasks\/([0-9a-f-]{36})\/approvals$/i);
+    if (approvalRoute && req.method === "POST") {
+      const session = sessionForRequest(req);
+      if (!session) return json(401, { ok: false, reason_code: "workspace_session_required" });
+      if (!new Set(["owner", "admin"]).has(session.role)) return json(403, { ok: false, reason_code: "approval_role_denied" });
+      const task = db.prepare("SELECT id FROM chip_tasks WHERE id=? AND workspace_id=? LIMIT 1").get(approvalRoute[1], session.workspace_id);
+      if (!task) return json(404, { ok: false, reason_code: "task_not_found" });
+      const body = await readJsonBody(req);
+      const decision = String(body.decision || "").trim().toLowerCase();
+      if (!new Set(["approved", "rejected", "cancelled"]).has(decision)) return json(400, { ok: false, reason_code: "approval_decision_invalid" });
+      const timestamp = new Date(now()).toISOString();
+      const nextState = decision === "approved" ? "planned" : "cancelled";
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.prepare("INSERT INTO task_approvals(id,task_id,decision,decided_by_subject_id,decided_at,note) VALUES(?,?,?,?,?,?)")
+          .run(crypto.randomUUID(), task.id, decision, session.living_subject_id, timestamp, safeText(body.note, { max: 1000 }) || null);
+        db.prepare("UPDATE chip_tasks SET state=?, updated_at=? WHERE id=?").run(nextState, timestamp, task.id);
+        db.prepare("INSERT INTO workspace_audit_events(id,workspace_id,actor_subject_id,event_type,resource_type,resource_id,created_at) VALUES(?,?,?,?,?,?,?)")
+          .run(crypto.randomUUID(), session.workspace_id, session.living_subject_id, `task_${decision}`, "task", task.id, timestamp);
+        db.exec("COMMIT");
+      } catch (error) { db.exec("ROLLBACK"); throw error; }
+      return json(200, { ok: true, task: { id: task.id, state: nextState }, decision });
+    }
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/workspace")) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
       return res.end("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Workspace</title><style>body{margin:0;background:#11110f;color:#f4f0e8;font:16px system-ui,sans-serif}main{max-width:720px;margin:14vh auto;padding:32px}small{color:#938d84;letter-spacing:.08em}h1{font-size:clamp(3rem,10vw,7rem);letter-spacing:-.08em;line-height:.9;margin:20px 0}p{max-width:38rem;color:#c8c1b5;line-height:1.55}section{border-top:1px solid #3a3834;margin-top:40px;padding-top:16px;color:#c8c1b5}strong{color:#f4f0e8;font-weight:600}button{margin-top:24px;background:#f4f0e8;color:#11110f;border:0;border-radius:999px;padding:11px 17px;font:inherit;font-weight:650;cursor:pointer}</style><main><small>NESSHA / WORKSPACE</small><h1>Workspace</h1><p>A private work surface with its own records, audit trail, and Workspace Chip boundary.</p><section><strong>Enter Workspace.</strong> Living verifies access once; Workspace then keeps its own session and private records.</section><button id=\"enter\">Continue</button><script>document.querySelector('#enter').onclick=async()=>{const r=await fetch('/workspace/session/exchange',{method:'POST'});if(r.ok)return location.assign('/workspace/app');const b=await r.json().catch(()=>({}));if(r.status===401)return location.assign('/login?return_to=/workspace');alert(b.reason_code||'Workspace access could not be verified.');};</script></main></html>");
@@ -206,7 +335,7 @@ function createWorkspaceServer({
         return res.end();
       }
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-      return res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace</title><style>body{margin:0;background:#11110f;color:#f4f0e8;font:16px system-ui,sans-serif}main{max-width:720px;margin:14vh auto;padding:32px}small{color:#938d84;letter-spacing:.08em}h1{font-size:clamp(2.5rem,8vw,5rem);letter-spacing:-.07em;margin:18px 0}p{color:#c8c1b5;line-height:1.55}section{border-top:1px solid #3a3834;margin-top:36px;padding-top:16px}button{background:transparent;color:#c8c1b5;border:1px solid #605d57;border-radius:999px;padding:8px 13px;font:inherit;cursor:pointer}</style><main><small>PRIVATE WORKSPACE</small><h1>${session.display_name.replace(/[<>&"]/g, "")}</h1><p>Signed in with a Workspace-local session. Private work has not been migrated from Living.</p><section><small>ROLE</small><p>${session.role}</p><button id="logout">Sign out</button></section><script>document.querySelector('#logout').onclick=async()=>{await fetch('/workspace/logout',{method:'POST'});location.assign('/workspace');};</script></main></html>`);
+      return res.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace</title><style>body{margin:0;background:#11110f;color:#f4f0e8;font:16px system-ui,sans-serif}main{max-width:720px;margin:10vh auto;padding:32px}small{color:#938d84;letter-spacing:.08em}h1{font-size:clamp(2.5rem,8vw,5rem);letter-spacing:-.07em;margin:18px 0}p{color:#c8c1b5;line-height:1.55}section{border-top:1px solid #3a3834;margin-top:36px;padding-top:16px}button,input,textarea{font:inherit}button{background:transparent;color:#c8c1b5;border:1px solid #605d57;border-radius:999px;padding:8px 13px;cursor:pointer}input,textarea{display:block;box-sizing:border-box;width:100%;margin:8px 0;padding:10px;background:#171714;color:#f4f0e8;border:1px solid #44413b;border-radius:8px}.item{padding:10px 0;border-bottom:1px solid #292722}.row{display:grid;grid-template-columns:1fr 1fr;gap:28px}@media(max-width:680px){.row{grid-template-columns:1fr}}</style><main><small>PRIVATE WORKSPACE</small><h1>${safeHtml(session.display_name)}</h1><p>Workspace-local session · ${safeHtml(session.role)}</p><div class="row"><section><small>CHATS</small><form id="chat-form"><input name="title" placeholder="New chat name" required><button>Create chat</button></form><div id="chats"></div></section><section><small>CHIP TASKS</small><form id="task-form"><input name="title" placeholder="Task title" required><textarea name="scope" placeholder="Exact scope" required></textarea><button>Create draft</button></form><div id="tasks"></div></section></div><section><button id="logout">Sign out</button></section><script>const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c]));async function refresh(){let c=await fetch('/workspace/chats').then(r=>r.json()),t=await fetch('/workspace/tasks').then(r=>r.json());document.querySelector('#chats').innerHTML=(c.chats||[]).map(x=>'<div class="item">'+esc(x.title)+'</div>').join('')||'<p>No private chats yet.</p>';document.querySelector('#tasks').innerHTML=(t.tasks||[]).map(x=>'<div class="item"><strong>'+esc(x.title)+'</strong><br><small>'+esc(x.state)+'</small></div>').join('')||'<p>No tasks yet.</p>';}document.querySelector('#chat-form').onsubmit=async e=>{e.preventDefault();let f=new FormData(e.target);let r=await fetch('/workspace/chats',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({title:f.get('title')})});if(r.ok){e.target.reset();refresh();}};document.querySelector('#task-form').onsubmit=async e=>{e.preventDefault();let f=new FormData(e.target);let r=await fetch('/workspace/tasks',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({title:f.get('title'),scope:f.get('scope')})});if(r.ok){e.target.reset();refresh();}};document.querySelector('#logout').onclick=async()=>{await fetch('/workspace/logout',{method:'POST'});location.assign('/workspace');};refresh();</script></main></html>`);
     }
     return json(404, { ok: false, error: "not_found" });
   };

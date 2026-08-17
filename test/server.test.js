@@ -63,3 +63,34 @@ test("Living exchange creates an isolated Workspace session", async () => {
   assert.equal(me.workspace.role, "owner");
   await new Promise((resolve) => server.close(resolve));
 });
+
+test("Workspace-local chat and task records are scoped to the exchanged session", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "workspace-core-"));
+  const server = createWorkspaceServer({
+    dbPath: path.join(dir, "workspace.sqlite"),
+    exchangeUrl: "http://living.test/exchange",
+    exchangeSecret: "exchange-secret",
+    fetchImpl: async () => new Response(JSON.stringify({
+      ok: true,
+      contract_version: "living_workspace_auth_exchange.v1",
+      subject_id: "living-subject-2",
+      workspace: { id: "workspace:core", label: "Core", role: "workspace_owner" },
+    }), { status: 200, headers: { "content-type": "application/json" } }),
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  const exchange = await fetch(`http://127.0.0.1:${port}/workspace/session/exchange`, { method: "POST", headers: { cookie: "nessha_session=living-token" } });
+  const cookie = exchange.headers.get("set-cookie").split(";")[0];
+  const headers = { cookie, "content-type": "application/json" };
+  const chat = await fetch(`http://127.0.0.1:${port}/workspace/chats`, { method: "POST", headers, body: JSON.stringify({ title: "Planning" }) }).then((response) => response.json());
+  assert.equal(chat.ok, true);
+  const message = await fetch(`http://127.0.0.1:${port}/workspace/chats/${chat.chat.id}/messages`, { method: "POST", headers, body: JSON.stringify({ body: "First private message" }) }).then((response) => response.json());
+  assert.equal(message.ok, true);
+  const task = await fetch(`http://127.0.0.1:${port}/workspace/tasks`, { method: "POST", headers, body: JSON.stringify({ title: "Review separation", scope: "Read the new contract." }) }).then((response) => response.json());
+  assert.equal(task.task.state, "draft");
+  const approval = await fetch(`http://127.0.0.1:${port}/workspace/tasks/${task.task.id}/approvals`, { method: "POST", headers, body: JSON.stringify({ decision: "approved" }) }).then((response) => response.json());
+  assert.equal(approval.task.state, "planned");
+  const chats = await fetch(`http://127.0.0.1:${port}/workspace/chats`, { headers: { cookie } }).then((response) => response.json());
+  assert.equal(chats.chats.length, 1);
+  await new Promise((resolve) => server.close(resolve));
+});
