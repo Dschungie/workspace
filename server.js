@@ -147,7 +147,7 @@ function createWorkspaceServer({
         ok: true,
         service: "workspace",
         mode: "isolated_foundation",
-        authorization: "not_configured",
+        authorization: exchangeUrl && exchangeSecret ? "configured" : "not_configured",
         legacy_data_migration: "not_started",
         migrations: migrationCount(),
         records: coreCounts(),
