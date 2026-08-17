@@ -33,7 +33,7 @@ function sourceSubject(value, accounts) {
 const source = new DatabaseSync(sourcePath, { readOnly: true });
 const target = new DatabaseSync(targetPath);
 target.exec("PRAGMA foreign_keys = ON");
-runMigrations(target, path.join(__dirname, "..", "migrations"));
+runMigrations(target, path.join(__dirname, "..", "migrations"), { logMigrations: false });
 
 const snapshotSha = crypto.createHash("sha256").update(fs.readFileSync(sourcePath)).digest("hex");
 if (importMode === "commit" && String(process.env.WORKSPACE_IMPORT_SOURCE_SHA256 || "").trim() !== snapshotSha) {

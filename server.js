@@ -15,7 +15,7 @@ function log(event, fields = {}) {
   process.stdout.write(`${JSON.stringify({ level: "info", event, ...fields, at: new Date().toISOString() })}\n`);
 }
 
-function runMigrations(db, migrationsDir = path.join(__dirname, "migrations")) {
+function runMigrations(db, migrationsDir = path.join(__dirname, "migrations"), { logMigrations = true } = {}) {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)");
   const applied = new Set(db.prepare("SELECT id FROM schema_migrations").all().map((row) => row.id));
   const migrations = fs.readdirSync(migrationsDir).filter((name) => name.endsWith(".sql")).sort();
@@ -32,7 +32,7 @@ function runMigrations(db, migrationsDir = path.join(__dirname, "migrations")) {
       db.exec("ROLLBACK");
       throw error;
     }
-    log("migration_applied", { migration: id });
+    if (logMigrations) log("migration_applied", { migration: id });
   }
 }
 
