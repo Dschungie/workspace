@@ -1,7 +1,7 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
-const Database = require("better-sqlite3");
+const { DatabaseSync } = require("node:sqlite");
 
 const port = Number.parseInt(process.env.PORT || "3000", 10);
 const dataDir = path.resolve(process.env.DATA_DIR || "/data");
@@ -19,19 +19,24 @@ function runMigrations(db, migrationsDir = path.join(__dirname, "migrations")) {
   for (const id of migrations) {
     if (applied.has(id)) continue;
     const sql = fs.readFileSync(path.join(migrationsDir, id), "utf8");
-    db.transaction(() => {
+    db.exec("BEGIN IMMEDIATE");
+    try {
       db.exec(sql);
       record.run(id, new Date().toISOString());
-    })();
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
     log("migration_applied", { migration: id });
   }
 }
 
 function createWorkspaceServer({ dbPath: customDbPath = dbPath } = {}) {
   fs.mkdirSync(path.dirname(customDbPath), { recursive: true });
-  const db = new Database(customDbPath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
+  const db = new DatabaseSync(customDbPath);
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA foreign_keys = ON");
   runMigrations(db);
 
   return http.createServer((req, res) => {
