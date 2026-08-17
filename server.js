@@ -124,6 +124,7 @@ function createWorkspaceServer({
       workspaces: db.prepare("SELECT COUNT(*) AS n FROM workspaces").get().n,
       memberships: db.prepare("SELECT COUNT(*) AS n FROM workspace_memberships").get().n,
       chats: db.prepare("SELECT COUNT(*) AS n FROM chats").get().n,
+      chat_memberships: db.prepare("SELECT COUNT(*) AS n FROM chat_memberships").get().n,
       tasks: db.prepare("SELECT COUNT(*) AS n FROM chip_tasks").get().n,
     });
     const json = (status, body) => {
@@ -148,7 +149,7 @@ function createWorkspaceServer({
         service: "workspace",
         mode: "isolated_foundation",
         authorization: exchangeUrl && exchangeSecret ? "configured" : "not_configured",
-        legacy_data_migration: "not_started",
+        legacy_data_migration: db.prepare("SELECT COUNT(*) AS n FROM legacy_migration_ledger").get().n > 0 ? "chat_history_imported" : "not_started",
         migrations: migrationCount(),
         records: coreCounts(),
       });
