@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { DatabaseSync } = require("node:sqlite");
 const { createWorkspaceServer } = require("../server");
 
 test("health and readiness work with a persistent SQLite database", async () => {
@@ -86,6 +87,14 @@ test("Workspace-local chat and task records are scoped to the exchanged session"
   assert.equal(chat.ok, true);
   const message = await fetch(`http://127.0.0.1:${port}/workspace/chats/${chat.chat.id}/messages`, { method: "POST", headers, body: JSON.stringify({ body: "First private message" }) }).then((response) => response.json());
   assert.equal(message.ok, true);
+  const db = new DatabaseSync(path.join(dir, "workspace.sqlite"));
+  const insert = db.prepare("INSERT INTO messages(id,chat_id,author_subject_id,body,created_at) VALUES(?,?,?,?,?)");
+  for (let i = 0; i < 205; i += 1) insert.run(`history-${i}`, chat.chat.id, "living-subject-2", `history-${i}`, `2026-01-01T00:00:00.${String(i).padStart(3, "0")}Z`);
+  db.close();
+  const history = await fetch(`http://127.0.0.1:${port}/workspace/chats/${chat.chat.id}/messages`, { headers: { cookie } }).then((response) => response.json());
+  assert.equal(history.messages.length, 200);
+  assert.equal(history.messages.some((entry) => entry.body === "history-204"), true);
+  assert.equal(history.messages.some((entry) => entry.body === "First private message"), true);
   const task = await fetch(`http://127.0.0.1:${port}/workspace/tasks`, { method: "POST", headers, body: JSON.stringify({ title: "Review separation", scope: "Read the new contract." }) }).then((response) => response.json());
   assert.equal(task.task.state, "draft");
   const approval = await fetch(`http://127.0.0.1:${port}/workspace/tasks/${task.task.id}/approvals`, { method: "POST", headers, body: JSON.stringify({ decision: "approved" }) }).then((response) => response.json());

@@ -264,7 +264,15 @@ function createWorkspaceServer({
       if (!membership) return json(404, { ok: false, reason_code: "chat_not_found" });
       if (req.method === "GET") {
         const messages = db.prepare(
-          "SELECT id, author_subject_id, body, created_at, edited_at FROM messages WHERE chat_id=? AND deleted_at IS NULL ORDER BY created_at ASC LIMIT 200"
+          `SELECT id, author_subject_id, body, created_at, edited_at
+             FROM (
+               SELECT id, author_subject_id, body, created_at, edited_at
+               FROM messages
+               WHERE chat_id=? AND deleted_at IS NULL
+               ORDER BY created_at DESC
+               LIMIT 200
+             )
+             ORDER BY created_at ASC`
         ).all(chatId);
         return json(200, { ok: true, messages });
       }
