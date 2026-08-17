@@ -8,12 +8,10 @@ services:
       NODE_ENV: production
       PORT: "3000"
       DATA_DIR: /data
-      # This resolves only inside the container. The Living API remains
-      # loopback-bound on the host and is never exposed as a Docker port.
-      LIVING_AUTH_EXCHANGE_URL: ${LIVING_AUTH_EXCHANGE_URL:-http://host.docker.internal:4567/api/workspace-auth/exchange}
+      # The existing TLS-protected Living API is the narrow trust boundary.
+      # Workspace has no database or filesystem access to Living.
+      LIVING_AUTH_EXCHANGE_URL: ${LIVING_AUTH_EXCHANGE_URL:-https://www.nessha.vn/api/workspace-auth/exchange}
       WORKSPACE_AUTH_EXCHANGE_SECRET: ${WORKSPACE_AUTH_EXCHANGE_SECRET:?set in the server-only environment}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:3105:3000"
     volumes:
