@@ -9,7 +9,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test test/*.test.js",
-    "smoke": "node scripts/smoke.js"
+    "smoke": "node scripts/smoke.js",
+    "audit:legacy-snapshot": "node scripts/legacy-workspace-inventory.js"
   },
   "dependencies": {}
 }
