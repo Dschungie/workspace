@@ -42,6 +42,12 @@ function createWorkspaceServer({ dbPath: customDbPath = dbPath } = {}) {
   return http.createServer((req, res) => {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
     const migrationCount = () => db.prepare("SELECT COUNT(*) AS n FROM schema_migrations").get().n;
+    const coreCounts = () => ({
+      workspaces: db.prepare("SELECT COUNT(*) AS n FROM workspaces").get().n,
+      memberships: db.prepare("SELECT COUNT(*) AS n FROM workspace_memberships").get().n,
+      chats: db.prepare("SELECT COUNT(*) AS n FROM chats").get().n,
+      tasks: db.prepare("SELECT COUNT(*) AS n FROM chip_tasks").get().n,
+    });
     const json = (status, body) => {
       res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
       res.end(JSON.stringify(body));
@@ -58,9 +64,20 @@ function createWorkspaceServer({ dbPath: customDbPath = dbPath } = {}) {
         return json(503, { ok: false, service: "workspace" });
       }
     }
+    if (req.method === "GET" && url.pathname === "/api/v1/workspace/status") {
+      return json(200, {
+        ok: true,
+        service: "workspace",
+        mode: "isolated_foundation",
+        authorization: "not_configured",
+        legacy_data_migration: "not_started",
+        migrations: migrationCount(),
+        records: coreCounts(),
+      });
+    }
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/workspace")) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-      return res.end("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Workspace</title><style>body{margin:0;background:#11110f;color:#f4f0e8;font:16px system-ui,sans-serif}main{max-width:680px;margin:18vh auto;padding:32px}h1{font-size:clamp(3rem,10vw,7rem);letter-spacing:-.08em;margin:0}p{max-width:38rem;color:#c8c1b5;line-height:1.55}small{color:#938d84}</style><main><small>NESSHA / WORKSPACE</small><h1>Workspace</h1><p>Private work foundation. Identity exchange, collaboration, and integrations are not enabled yet.</p></main></html>");
+      return res.end("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Workspace</title><style>body{margin:0;background:#11110f;color:#f4f0e8;font:16px system-ui,sans-serif}main{max-width:720px;margin:14vh auto;padding:32px}small{color:#938d84;letter-spacing:.08em}h1{font-size:clamp(3rem,10vw,7rem);letter-spacing:-.08em;line-height:.9;margin:20px 0}p{max-width:38rem;color:#c8c1b5;line-height:1.55}section{border-top:1px solid #3a3834;margin-top:40px;padding-top:16px;color:#c8c1b5}strong{color:#f4f0e8;font-weight:600}</style><main><small>NESSHA / WORKSPACE</small><h1>Workspace</h1><p>A private work surface with its own records, audit trail, and future Workspace Chip boundary.</p><section><strong>Foundation ready.</strong> Authorization from Living, collaboration, and integrations are intentionally not connected yet.</section></main></html>");
     }
     return json(404, { ok: false, error: "not_found" });
   });
