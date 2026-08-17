@@ -11,7 +11,5 @@
     "test": "node --test test/*.test.js",
     "smoke": "node scripts/smoke.js"
   },
-  "dependencies": {
-    "better-sqlite3": "^12.4.1"
-  }
+  "dependencies": {}
 }
